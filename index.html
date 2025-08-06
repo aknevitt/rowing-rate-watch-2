@@ -6,6 +6,8 @@
     <title>Rate Watch Pro</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>
         body {
@@ -76,7 +78,7 @@
             Start
         </button>
 
-        <p id="instructionText" class="text-sm text-gray-500 mt-6">Click "Start", complete the strokes, then click "Stop".</p>
+        <p id="instructionText" class="text-sm text-gray-500 mt-6">Click "Start" at the catch and "Stop" at the catch to record the time for a full stroke. After collecting 3+ records a graph will display.</p>
 
         <!-- Section for previous records -->
         <div id="previousRecords" class="mt-10 w-full">
@@ -91,6 +93,19 @@
                 <!-- History items will be inserted here by JavaScript -->
             </ul>
         </div>
+        
+        <!-- Graph Section -->
+        <div id="graphContainer" class="mt-10 w-full">
+             <canvas id="historyChart" style="display: none;"></canvas>
+        </div>
+
+        <!-- Export Section -->
+        <div id="exportContainer" class="mt-10 w-full border-t pt-6">
+            <button id="exportButton" class="button w-full py-3 px-6 bg-gradient-to-r from-gray-600 to-gray-800 text-white font-semibold text-lg rounded-xl shadow-lg hover:from-gray-700 hover:to-gray-900 focus:outline-none focus:ring-4 focus:ring-gray-300">
+                Export to CSV
+            </button>
+        </div>
+
     </div>
 
     <script>
@@ -104,12 +119,15 @@
         const clearHistoryButton = document.getElementById('clearHistoryButton');
         const averageSpmSection = document.getElementById('averageSpmSection');
         const averageSpmDisplay = document.getElementById('averageSpmDisplay');
+        const chartCanvas = document.getElementById('historyChart');
+        const exportButton = document.getElementById('exportButton');
 
         // State variables for the application
         let timerRunning = false;
         let startTime = 0;
         let previousSpms = [];
-        const maxHistoryRecords = 10; // Increased history size
+        const maxHistoryRecords = 10;
+        let historyChart; // Variable to hold the chart instance
 
         /**
          * Loads previous records from localStorage when the page loads.
@@ -128,35 +146,111 @@
         function saveHistoryToStorage() {
             localStorage.setItem('rowingRateHistory', JSON.stringify(previousSpms));
         }
+        
+        /**
+         * Updates the chart display based on the current history.
+         */
+        function updateChartDisplay() {
+            if (previousSpms.length < 3) {
+                chartCanvas.style.display = 'none';
+                if (historyChart) {
+                    historyChart.destroy();
+                    historyChart = null;
+                }
+                return;
+            }
+            
+            chartCanvas.style.display = 'block';
+
+            const labels = previousSpms.map(record => 
+                new Date(record.timestamp).toLocaleTimeString('en-AU', {
+                    timeZone: 'Australia/Sydney',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                })
+            );
+            const data = previousSpms.map(record => record.spm);
+
+            if (historyChart) {
+                historyChart.data.labels = labels;
+                historyChart.data.datasets[0].data = data;
+                historyChart.update();
+            } else {
+                const ctx = chartCanvas.getContext('2d');
+                historyChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Strokes Per Minute',
+                            data: data,
+                            borderColor: 'rgba(59, 130, 246, 1)',
+                            backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                            fill: true,
+                            tension: 0.4,
+                            pointBackgroundColor: 'rgba(59, 130, 246, 1)',
+                            pointBorderColor: '#fff',
+                            pointHoverRadius: 7,
+                            pointHoverBackgroundColor: '#fff',
+                            pointHoverBorderColor: 'rgba(59, 130, 246, 1)'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        scales: {
+                            y: { beginAtZero: false, title: { display: true, text: 'Rate (SPM)', font: { weight: 'bold' } } },
+                            x: { title: { display: true, text: 'Time', font: { weight: 'bold' } } }
+                        },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: { displayColors: false, callbacks: { label: context => `Rate: ${context.raw.toFixed(1)} SPM` } }
+                        }
+                    }
+                });
+            }
+        }
 
         /**
          * Updates the display of previous stroke rate records and the average.
          */
         function updateHistoryDisplay() {
-            historyList.innerHTML = ''; // Clear existing list items
+            historyList.innerHTML = '';
 
             if (previousSpms.length === 0) {
                 const listItem = document.createElement('li');
                 listItem.className = 'text-gray-500 text-center py-2';
                 listItem.textContent = 'No records yet.';
                 historyList.appendChild(listItem);
-                averageSpmSection.classList.add('hidden'); // Hide average section if no history
+                averageSpmSection.classList.add('hidden');
             } else {
-                // Show average section
                 averageSpmSection.classList.remove('hidden');
-                const totalSpm = previousSpms.reduce((sum, spm) => sum + spm, 0);
+                const totalSpm = previousSpms.reduce((sum, record) => sum + record.spm, 0);
                 const averageSpm = totalSpm / previousSpms.length;
                 averageSpmDisplay.textContent = averageSpm.toFixed(1);
 
-                // Iterate in reverse to show most recent at the top
-                previousSpms.slice().reverse().forEach((spm, index) => {
+                previousSpms.slice().reverse().forEach((record, index) => {
                     const listItem = document.createElement('li');
                     listItem.className = 'bg-gray-100 p-3 rounded-lg flex justify-between items-center';
                     const recordNumber = previousSpms.length - index;
-                    listItem.innerHTML = `<span class="font-semibold text-gray-600">Record #${recordNumber}</span> <span class="font-bold text-gray-800 text-xl">${spm.toFixed(1)} SPM</span>`;
+                    const timeString = new Date(record.timestamp).toLocaleString('en-AU', {
+                        timeZone: 'Australia/Sydney',
+                        hour: 'numeric',
+                        minute: '2-digit',
+                        hour12: true
+                    }).toUpperCase();
+
+                    listItem.innerHTML = `
+                        <div>
+                            <span class="font-semibold text-gray-600">Record #${recordNumber}</span>
+                            <span class="font-bold text-gray-800 text-xl ml-4">${record.spm.toFixed(1)} SPM</span>
+                        </div>
+                        <span class="text-sm text-gray-500 font-medium">${timeString}</span>
+                    `;
                     historyList.appendChild(listItem);
                 });
             }
+            updateChartDisplay();
         }
         
         /**
@@ -170,51 +264,38 @@
             }
 
             if (!timerRunning) {
-                // --- STATE 1: START TIMER ---
                 startTime = performance.now();
                 timerRunning = true;
-                strokeCountInput.disabled = true; // Disable input while running
-
+                strokeCountInput.disabled = true;
                 mainButton.textContent = 'Stop';
-                mainButton.classList.remove('from-blue-500', 'to-blue-700', 'hover:from-blue-600', 'hover:to-blue-800');
-                mainButton.classList.add('from-red-500', 'to-red-700', 'hover:from-red-600', 'hover:to-red-800');
-
+                mainButton.classList.remove('from-blue-500', 'to-blue-700');
+                mainButton.classList.add('from-red-500', 'to-red-700');
                 timeDisplay.textContent = '...';
                 spmDisplay.textContent = '...';
                 instructionText.textContent = `Complete ${targetStrokes} strokes, then click "Stop".`;
-
             } else {
-                // --- STATE 2: STOP TIMER & CALCULATE ---
                 const endTime = performance.now();
-                const timeElapsedMs = endTime - startTime;
-                const timeElapsedSeconds = timeElapsedMs / 1000;
+                const timeElapsedSeconds = (endTime - startTime) / 1000;
 
-                // Prevent division by zero or absurdly fast times
-                if (timeElapsedSeconds < 0.1) {
-                    alert("Time elapsed is too short for a valid measurement.");
-                    // Reset without saving
-                } else {
+                if (timeElapsedSeconds > 0.1) {
                     const strokesPerMinute = (targetStrokes / timeElapsedSeconds) * 60;
-
                     timeDisplay.textContent = `${timeElapsedSeconds.toFixed(1)}s`;
                     spmDisplay.textContent = `${strokesPerMinute.toFixed(1)}`;
-
-                    // Add the new SPM to the history
-                    previousSpms.push(strokesPerMinute);
+                    const newRecord = { spm: strokesPerMinute, timestamp: new Date().toISOString() };
+                    previousSpms.push(newRecord);
                     if (previousSpms.length > maxHistoryRecords) {
-                        previousSpms.shift(); // Remove the oldest record
+                        previousSpms.shift();
                     }
                     saveHistoryToStorage();
                     updateHistoryDisplay();
                 }
 
-                // --- RESET UI ---
                 timerRunning = false;
-                strokeCountInput.disabled = false; // Re-enable input
+                strokeCountInput.disabled = false;
                 mainButton.textContent = 'Start';
-                mainButton.classList.remove('from-red-500', 'to-red-700', 'hover:from-red-600', 'hover:to-red-800');
-                mainButton.classList.add('from-blue-500', 'to-blue-700', 'hover:from-blue-600', 'hover:to-blue-800');
-                instructionText.textContent = 'Click "Start", complete the strokes, then click "Stop".';
+                mainButton.classList.remove('from-red-500', 'to-red-700');
+                mainButton.classList.add('from-blue-500', 'to-blue-700');
+                instructionText.textContent = 'Click "Start" at the catch and "Stop" at the catch to record the time for a full stroke. After collecting 3+ records a graph will display.';
             }
         });
 
@@ -228,6 +309,40 @@
                 updateHistoryDisplay();
             }
         });
+        
+        /**
+         * Exports the history data to a CSV file.
+         */
+        function exportToCsv() {
+            if (previousSpms.length === 0) {
+                alert("There is no history to export.");
+                return;
+            }
+
+            const headers = ["Record Number", "SPM", "Date (AEST)", "Time (AEST)"];
+            let csvRows = [headers.join(",")];
+
+            previousSpms.forEach((record, index) => {
+                const recordNumber = index + 1;
+                const spm = record.spm.toFixed(1);
+                const recordDate = new Date(record.timestamp);
+                const dateString = recordDate.toLocaleDateString('en-AU', { timeZone: 'Australia/Sydney' });
+                const timeString = recordDate.toLocaleTimeString('en-AU', { timeZone: 'Australia/Sydney', hour12: false });
+                csvRows.push([recordNumber, spm, `"${dateString}"`, `"${timeString}"`].join(","));
+            });
+
+            const csvContent = "data:text/csv;charset=utf-8," + csvRows.join("\r\n");
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            link.setAttribute("download", "rowing_rate_history.csv");
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+
+        // Add event listener for the export button
+        exportButton.addEventListener('click', exportToCsv);
 
         // Initial load from storage when the app starts
         loadHistoryFromStorage();
